@@ -1,0 +1,163 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Dystoguide – Head Pose Final</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; padding: 20px; }
+    video { width: 640px; height: 480px; border: 1px solid #ccc; }
+    #angles { margin-top: 15px; font-size: 18px; }
+    #interpretation { margin-top: 10px; font-weight: bold; color: #444; }
+  </style>
+</head>
+<body>
+  <h1>Dystoguide (Head Pose Tracker)</h1>
+  <video id="video" autoplay playsinline width="640" height="480"></video>
+  <div id="angles">Ожидание загрузки OpenCV.js...</div>
+  <div id="interpretation"></div>
+  <button id="stopBtn">Остановить и показать результат</button>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+
+  <script>
+    let videoElement = document.getElementById('video');
+    let anglesDiv = document.getElementById('angles');
+    let interpDiv = document.getElementById('interpretation');
+    let camera;
+    let lastPose = {yaw: 0, pitch: 0, roll: 0};
+
+    function getImagePoints(landmarks) {
+      return cv.matFromArray(6, 2, cv.CV_64FC1, [
+        landmarks[1].x * videoElement.width, landmarks[1].y * videoElement.height,     // Нос
+        landmarks[152].x * videoElement.width, landmarks[152].y * videoElement.height, // Подбородок
+        landmarks[263].x * videoElement.width, landmarks[263].y * videoElement.height, // Левый глаз
+        landmarks[33].x * videoElement.width, landmarks[33].y * videoElement.height,   // Правый глаз
+        landmarks[287].x * videoElement.width, landmarks[287].y * videoElement.height, // Левый рот
+        landmarks[57].x * videoElement.width, landmarks[57].y * videoElement.height    // Правый рот
+      ]);
+    }
+
+    function getModelPoints() {
+      return cv.matFromArray(6, 3, cv.CV_64FC1, [
+         0.0, 0.0, 0.0,
+         0.0, -330.0, -65.0,
+         -225.0, 170.0, -135.0,
+         225.0, 170.0, -135.0,
+         -150.0, -150.0, -125.0,
+         150.0, -150.0, -125.0
+      ]);
+    }
+
+    function getCameraMatrix() {
+      const f = videoElement.width;
+      const cx = videoElement.width / 2;
+      const cy = videoElement.height / 2;
+      return cv.matFromArray(3, 3, cv.CV_64FC1, [
+        f, 0, cx,
+        0, f, cy,
+        0, 0, 1
+      ]);
+    }
+
+    function interpretPose(pose) {
+      let text = "";
+      if (pose.roll > 15) text += "Латероколлис слева (наклон влево)<br>";
+      if (pose.roll < -15) text += "Латероколлис справа (наклон вправо)<br>";
+      if (pose.yaw > 15) text += "Тортиколлис вправо (поворот вправо)<br>";
+      if (pose.yaw < -15) text += "Тортиколлис влево (поворот влево)<br>";
+      if (pose.pitch > 10) text += "Антероколлис наклон вперёд)<br>";
+      if (pose.pitch < -10) text += "Ретроколлис (запрокидывание назад)<br>";
+      if (text === "") text = "Незначительное отклонение головы.";
+      return text;
+    }
+
+    function solveHeadPose(landmarks) {
+      if (!landmarks || landmarks.length < 300) return;
+
+      const imagePoints = getImagePoints(landmarks);
+      const modelPoints = getModelPoints();
+      const cameraMatrix = getCameraMatrix();
+      const distCoeffs = cv.Mat.zeros(4, 1, cv.CV_64FC1);
+
+      const rvec = new cv.Mat(), tvec = new cv.Mat();
+      const success = cv.solvePnP(modelPoints, imagePoints, cameraMatrix, distCoeffs, rvec, tvec);
+
+      if (success) {
+        const rmat = new cv.Mat();
+        cv.Rodrigues(rvec, rmat);
+
+        let sy = Math.sqrt(rmat.doubleAt(0,0) ** 2 + rmat.doubleAt(1,0) ** 2);
+        let singular = sy < 1e-6;
+
+        let x, y, z;
+        if (!singular) {
+          x = Math.atan2(rmat.doubleAt(2,1), rmat.doubleAt(2,2));
+          y = Math.atan2(-rmat.doubleAt(2,0), sy);
+          z = Math.atan2(rmat.doubleAt(1,0), rmat.doubleAt(0,0));
+        } else {
+          x = Math.atan2(-rmat.doubleAt(1,2), rmat.doubleAt(1,1));
+          y = Math.atan2(-rmat.doubleAt(2,0), sy);
+          z = 0;
+        }
+
+        const pitch = (x * 180 / Math.PI).toFixed(1);
+        const yaw = (y * 180 / Math.PI).toFixed(1);
+        const roll = (z * 180 / Math.PI).toFixed(1);
+
+        lastPose = {yaw: parseFloat(yaw), pitch: parseFloat(pitch), roll: parseFloat(roll)};
+
+        anglesDiv.innerHTML = `
+          <strong>Yaw:</strong> ${yaw}°<br>
+          <strong>Pitch:</strong> ${pitch}°<br>
+          <strong>Roll:</strong> ${roll}°<br>
+        `;
+      }
+    }
+
+    function startTracking() {
+      const faceMesh = new FaceMesh({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+      });
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+
+      faceMesh.onResults((results) => {
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0 && cv && cv.Mat) {
+          solveHeadPose(results.multiFaceLandmarks[0]);
+        }
+      });
+
+      camera = new Camera(videoElement, {
+        onFrame: async () => {
+          await faceMesh.send({ image: videoElement });
+        },
+        width: 640,
+        height: 480
+      });
+
+      camera.start();
+    }
+
+    document.getElementById("stopBtn").onclick = () => {
+      if (camera) camera.stop();
+      interpDiv.innerHTML = interpretPose(lastPose);
+    };
+
+    setTimeout(() => {
+      if (cv && cv.Mat) {
+        anglesDiv.innerHTML = "OpenCV.js загружен ✅";
+        startTracking();
+      } else {
+        anglesDiv.innerHTML = "Ошибка загрузки OpenCV.js ❌";
+      }
+    }, 5000);
+  </script>
+</body>
+</html>
