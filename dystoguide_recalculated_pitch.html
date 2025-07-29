@@ -1,0 +1,80 @@
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>DystoGuide Holistic – recalculated pitch</title>
+<style>
+ body{font-family:sans-serif;text-align:center;padding:20px}
+ video{width:100%;max-width:480px;border:1px solid #ccc}
+ #ang,#raw,#txt{margin-top:12px;font-size:17px}
+ #txt{font-weight:600}
+ .mild{color:#777}.mod{color:#d97706}.sev{color:#c00}.none{color:#2b2}
+</style>
+</head>
+<body>
+<h2>DystoGuide Holistic 🎯</h2>
+<video id="cam" autoplay playsinline muted></video>
+<div id="ang">—</div><div id="raw">—</div><div id="txt">⏳</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script>
+const v=document.getElementById('cam'),
+ang=e=>document.getElementById('ang').innerHTML=e,
+raw=e=>document.getElementById('raw').innerHTML=e,
+out=e=>document.getElementById('txt').innerHTML=e;
+
+const grade=d=>{const a=Math.abs(d);if(a<1)return["нет","none"];if(a<6)return["незнач.","mild"];if(a<11)return["умер.","mod"];if(a<16)return["выраж.","sev"];return["сильн.","sev"];};
+
+function analyse(r){
+ if(!r.poseLandmarks||!r.faceLandmarks)return;
+ const p=r.poseLandmarks,f=r.faceLandmarks;
+ const nose=f[1],chin=f[152],leye=f[33],reye=f[263],lSh=p[11],rSh=p[12];
+ const neck={x:(lSh.x+rSh.x)/2,y:(lSh.y+rSh.y)/2,z:(lSh.z+rSh.z)/2};
+ /* roll (латеро) */
+ const rollDeg=+((nose.x-neck.x)*90).toFixed(1);
+ /* yaw (торти) */
+ const yawDeg=+((reye.y-leye.y)*90).toFixed(1);
+ /* pitch по вектору nose‑chin */
+ const dy=chin.y-nose.y, dz=chin.z-nose.z;
+ const pitchRad=Math.atan2(dz,dy);
+ const pitchDeg=+(pitchRad*180/Math.PI).toFixed(1);
+
+ ang(`Yaw: ${yawDeg}°, Pitch: ${pitchDeg}°, Roll: ${rollDeg}°`);
+ raw(`dy ${dy.toFixed(3)} | dz ${dz.toFixed(3)} | dx ${(nose.x-neck.x).toFixed(3)}`);
+
+ let txt=""; let any=false;
+ /* lat cap/coll */
+ if(Math.abs(rollDeg)>=1){
+  const dir=rollDeg>0?"вправо":"влево";
+  const[g,c]=grade(rollDeg);
+  txt+=`<span class="${c}">Латерокапут ${dir} (${g}, ${Math.abs(rollDeg)}°)<br>Латероколлис ${dir}</span><br>`;
+  any=true;
+ }
+ /* antero/retro */
+ if(Math.abs(pitchDeg)>=1){
+  const[g,c]=grade(pitchDeg);
+  if(pitchDeg>0){
+   txt+=`<span class="${c}">Антерокапут (${g}, ${pitchDeg}°)<br>Антероколлис</span><br>`;
+  }else{
+   txt+=`<span class="${c}">Ретрокапут (${g}, ${Math.abs(pitchDeg)}°)<br>Ретроколлис</span><br>`;
+  }
+  any=true;
+ }
+ /* torti */
+ if(Math.abs(yawDeg)>=1){
+  const dir=yawDeg>0?"влево":"вправо";
+  const[g,c]=grade(yawDeg);
+  txt+=`<span class="${c}">Тортикапут ${dir} (${g}, ${Math.abs(yawDeg)}°)<br>Тортиколлис ${dir}</span><br>`;
+  any=true;
+ }
+ out(any?txt:'<span class="none">Незначительное отклонение головы</span>');
+}
+
+const hol=new Holistic({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${f}`});
+hol.setOptions({modelComplexity:1,smoothLandmarks:true,minDetectionConfidence:0.5,minTrackingConfidence:0.5});
+hol.onResults(analyse);
+new Camera(v,{onFrame:()=>hol.send({image:v}),width:640,height:480}).start();
+</script>
+</body></html>
